@@ -4,8 +4,11 @@ from memory import *
 from queue import Queue
 from copy import deepcopy
 from nltk import Tree
-import torch.optim as optim
+from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
+import torch.optim as optim
+import pickle as pkl
+import os
 
 
 class Agent:
@@ -15,7 +18,7 @@ class Agent:
     Class describing an RL agent.
     """
     
-    def __init__(self, gamma=.9, categories=[4, 3, 3, 3, 2, 4], labels=[0, 1]):
+    def __init__(self, gamma=.9, categories=[4, 3, 3, 3, 2, 4], labels=[0, 1], init=True):
         """
         Description
         --------------
@@ -47,7 +50,12 @@ class Agent:
         self.labels = labels
         self.actions = range(self.d + len(labels))
         self.actions_report = [self.d + label for label in labels]
-        self.Q, self.PI, self.V = self.initialize()
+        if init:
+            self.Q, self.PI, self.V = self.initialize()
+            
+        else:
+            self.Q, self.PI, self.V = {}, {}, {}
+            
         self.policy = None
         
     def initialize(self):
@@ -79,9 +87,6 @@ class Agent:
         
         n_queries = len(root.unobserved)
         Q[root_repr], PI[root_repr], V[root_repr] = np.full(self.d + self.b, np.NaN), np.zeros(self.d + self.b), np.full(self.d + self.b, np.NaN)
-        # Q(empty_state)(query) = 0 , Q(empty_state)(report) = NaN ; no report allowed at the empty state.
-        # PI(empty_state)(query) = 1/n_queries , PI(empty_state)(report) = 0 ; no report allowed at the empty state.
-        # V(empty_state)(query) = 0 , V(empty_state)(report) = NaN ; no report allowed at the empty state.
         for query in root.unobserved:
             Q[root_repr][query], PI[root_repr][query], V[root_repr][query] = 0, 1/n_queries, 0
     
@@ -162,7 +167,7 @@ class Agent:
         for state_repr in self.Q:
             self.policy[state_repr] = np.nanargmax(self.Q[state_repr])
             
-    def q_learning(self, env, n_episodes=100):
+    def q_learning(self, env, n_episodes=100, n_save=1000, path_save='q_learning/'):
         """
         Description
         --------------
@@ -177,12 +182,14 @@ class Agent:
         --------------
         """
         
+        if not os.path.isdir(path_save):
+            os.mkdir(path_save)
+        
         env.reset()
         state = deepcopy(env.state)
         state_repr = repr(state)
         done = env.done
         for i in range(n_episodes):
-            if (i)%10000 == 0: print("episode : %d" %(i))
             while not state.complete:
                 # Reports are not allowed at the empty state.
                 if not state.empty:
@@ -217,6 +224,10 @@ class Agent:
             state = deepcopy(env.state)
             state_repr = repr(state)
             done = env.done
+            
+            if i%n_save == 0:
+                print('Episode : %d' %i)
+                self.save_weights(path_save + 'q_learning_weights_' + str(i) + '.pkl')
             
     def predict(self, env, data_point):
         """
@@ -269,6 +280,40 @@ class Agent:
             valids += (label_pred==label_true)
             
         return valids/n_test
+    
+    def save_weights(self, path):
+        """
+        Description
+        --------------
+        Save the agents q-dictionary.
+        
+        Parameters
+        --------------
+        path: String, path to a .pkl file containing q-dictionary.
+        
+        Returns
+        --------------
+        """
+        
+        with open(path, 'wb') as f:
+            pkl.dump(self.Q, f)
+    
+    def load_weights(self, path):
+        """
+        Description
+        --------------
+        Load the q-dictionary.
+        
+        Parameters
+        --------------
+        path: String, path to a .pkl file containing q-dictionary.
+        
+        Returns
+        --------------
+        """
+        
+        with open(path, 'rb') as f:
+            self.Q = pkl.load(f)
     
     def children(self, state):
         """
@@ -502,8 +547,8 @@ class AgentDQN:
             reward, next_state, _ = env.step(report)
             self.memory_reports.add(state, report, reward, next_state)   
             
-    def train(self, env, n_train=1000, n_pretrain=100, epsilon_start=1, epsilon_stop=1e-4, decay_rate=1e-3, n_learn=5, batch_size=32, lr=1e-4, log_dir='runs/', 
-             n_write=10, max_tau=50, double=True, n_prints=100):
+    def train(self, env, n_train=1000, n_pretrain=100, epsilon_start=1, epsilon_stop=1e-4, decay_rate=1e-3, n_learn=5, batch_size=32, lr=1e-4, log_dir='runs_dqn/', 
+             n_write=10, max_tau=50, double=True, n_save=1000, path_save='dqn_weights/'):
         """
         Description
         --------------
@@ -524,13 +569,16 @@ class AgentDQN:
         n_write       : Int, the number of iterations between two consecutive events writings.
         max_tau       : Int, the number of iterations between two consecutive target network updates.
         double        : Boolean, whether to use Double DQN or just DQN.
-        n_prints      : Int, the number of iterations between two consecutive prints.
+        n_save        : Int, the number of episodes between two consecutive saved models.
+        path_save     : String, the path of the folder where weights will be saved.
         
         Returns
         --------------
         """
         
         writer = SummaryWriter(log_dir=log_dir)
+        if not os.path.isdir(path_save):
+            os.mkdir(path_save)
         
         # Pretrain the agent.
         self.pretrain(env, n_pretrain)
@@ -569,7 +617,7 @@ class AgentDQN:
                             q_values = self.q_network(next_states_batch_queries)
                             q_values = q_values - 100*next_states_batch_unallowed
                             actions_values = torch.argmax(q_values, dim=1)
-                            q_targets_queries = rewards_batch_queries + self.gamma*self.q_network_target(next_states_batch_queries)[np.arange(batch_size), actions_values]
+                            q_targets_queries = rewards_batch_queries + self.gamma*self.q_network_target(next_states_batch_queries)[np.arange(batch_size), actions_values].detach()
 
                         else:
                             q_values = self.q_network_target(next_states_batch_queries)
@@ -610,8 +658,9 @@ class AgentDQN:
             reward, next_state, _ = env.step(report)
             self.memory_reports.add(state, report, reward, next_state)
             
-            if episode%n_prints == 0:
+            if episode%n_save == 0:
                 print('Episode : %d, epsilon : %.3f' %(episode, epsilon))
+                self.save_weights(path_save + 'dqn_weights_' + str(episode) + '.pth')
                         
         writer.close()
         
@@ -779,6 +828,367 @@ class AgentDQN:
         """
 
         return Tree.fromstring(self.build_string(encoder))
+    
+    
+    
+class AgentActorCritic:
+    """
+    Description
+    --------------
+    Class describing a DQN agent
+    """
+    
+    def __init__(self, gamma=.9, categories=[4, 3, 3, 3, 2, 4], labels=[0, 1], min_queries=4):
+        """
+        Description
+        --------------
+        Constructor of class AgentDQN.
+        
+        Parameters & Attributes
+        --------------
+        gamma           : Float in ]0, 1[, the discount factor (default=0.9).
+        categories      : List of length d where categories[i] is the number of categories feature i can take.
+        labels          : List of the possible labels.
+        min_queries     : Int, the minimum number of queries the agent has to perform before being allowed to report a label.
+        d               : Int, the number of feature variables.
+        b               : Int, the number of class labels.
+        actions         : List of all actions.
+        actions_queries : List of query actions.
+        actions_report  : List of report actions.
+
+        Returns
+        --------------
+        """
+        
+        self.gamma = gamma
+        self.categories = categories
+        self.labels = labels
+        self.min_queries = min_queries
+        self.d = len(categories)
+        self.b = len(labels)
+        self.actions = range(self.d + len(labels))
+        self.actions_queries = range(self.d)
+        self.actions_report = [self.d + label for label in labels]
+        self.actor_critic = ActorCritic(input_size=np.sum(categories)+self.d, out=self.d+self.b)
+        
+    def actions_probas(self, state):
+        """
+        Description
+        --------------
+        Calculate the probabilities of the allowed actions at a state.
+        
+        Parameters
+        --------------
+        state   : Object of class State.
+        
+        Returns
+        --------------
+        actions_probas  : torch.tensor of size #Allowed_actions, with the allowed actions probabilities.
+        actions_allowed : List of the allowed actions.
+        value           : 1D torch.tensor, the state value estimated by the value head of the Actor-Critic network.
+        """
+        
+        value, actions_output = self.actor_critic(torch.from_numpy(state.values_encoded))
+        if len(state.observed) < self.min_queries:
+            actions_allowed = list(state.unobserved)
+            
+        else:
+            actions_allowed = list(state.unobserved) + [self.d+i for i in range(self.b)]
+            
+        actions_probas = F.softmax(actions_output[0, actions_allowed], dim=0)
+        return actions_probas, actions_allowed, value
+        
+    def action(self, state):
+        """
+        Description
+        --------------
+        Choose an action at a state by sampling from the current stochastic policy.
+        
+        Parameters
+        --------------
+        state  : Object of class State.
+        
+        Returns
+        --------------
+        action           : Int in {0, ..., d-1, d, d+1}, action sampled from the stochastic policy of the Actor.
+        action_log_proba : Float, the log probability correspoding to the performed action.
+        actions_probas   : List of length #Allowed_actions with the estimated probabilities of the allowed actions.
+        value            : 1D torch.tensor, the state value estimated by the value head of the Actor-Critic network.
+        """
+        
+        actions_probas, actions_allowed, value = self.actions_probas(state)
+        m = Categorical(actions_probas)
+        index = m.sample()
+        action, action_log_prob = actions_allowed[index], m.log_prob(index)
+        return action, action_log_prob, actions_probas, value
+    
+    def action_greedy(self, state):
+        """
+        Description
+        --------------
+        Choose the action maximizing the stochastic policy at the state.
+        
+        Parameters
+        --------------
+        state  : Object of class State.
+        
+        Returns
+        --------------
+        action : Int in {0, ..., d-1, d, d+1}
+        """
+        
+        with torch.no_grad():
+            actions_probas, actions_allowed, _ = self.actions_probas(state)
+            return actions_allowed[torch.argmax(actions_probas).item()]
+        
+        
+    def train(self, env, n_train=1000, lr=3e-4, log_dir='runs_actor_critic/', n_save=1000, path_save='actor_critic_weights/', max_step=8, lambd=1e-3, clip_grad=.1):
+        """
+        Description
+        --------------
+        Explore the environment and train the agent.
+        
+        Parameters
+        --------------
+        env       : Object of class Environment.
+        n_train   : Int, number of training episodes.
+        lr        : Float, the learning rate.
+        log_dir   : String, path of the folder where tensorboard events are stored.
+        n_save    : Int, the number of episodes between two consecutive saved models.
+        path_save : String, path of the directory where the models weights will be stored.
+        max_step  : Int, the number of steps in an episode between two consecutive parameters update.
+        lambd     : Float, the entropy loss parameter.
+        clip_grad : Float in [0, 1] clipping the norm of the gradient to avoid over-optimistic updates.
+        
+        Returns
+        --------------
+        """
+        
+        writer = SummaryWriter(log_dir=log_dir)
+        if not os.path.isdir(path_save):
+            os.mkdir(path_save)
+        
+        optimizer = optim.Adam(self.actor_critic.parameters(), lr=lr)
+        it = 0
+        for episode in range(n_train):
+            env.reset()
+            state = deepcopy(env.state)
+            episode_len = 0
+            episode_rewards = 0
+            while not env.done:
+                rewards, values, log_probs = [], [], []
+                step = 0
+                entropy = 0
+                while (not env.done) and (step <= max_step):
+                    action, action_log_prob, actions_probas, value = self.action(state)
+                    reward, next_state, _ = env.step(action)
+                    episode_rewards += reward
+                    rewards.append(reward)
+                    values.append(value)
+                    log_probs.append(action_log_prob.reshape(1, 1))
+                    state = deepcopy(next_state)
+                    entropy += -(actions_probas*torch.log(actions_probas)).sum()
+                    step += 1
+                    it += 1
+                    episode_len += 1
+
+                R = torch.tensor(0, dtype=torch.float32) if env.done else self.actor_critic(torch.from_numpy(state.values_encoded))[0].detach()
+                size = len(values)
+                values_target = [0 for i in range(size)]
+                for t in range(size-1, -1, -1):
+                    R = torch.tensor(rewards[t], dtype=torch.float32) + self.gamma*R
+                    values_target[t] = R.reshape(1, 1)
+
+                values_target = torch.cat(values_target)
+                values_current = torch.cat(values)
+                log_probs = torch.cat(log_probs)
+
+                advantage = values_target - values_current
+                critic_loss = 0.5*(advantage**2).mean()
+                actor_loss = -(log_probs*advantage.detach()).mean()
+                entropy_loss = -entropy/size
+                loss = actor_loss + critic_loss + lambd*entropy_loss
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), clip_grad)
+                optimizer.step()
+
+                writer.add_scalar('Losses/Actor', actor_loss.item(), it)
+                writer.add_scalar('Losses/Critic', critic_loss.item(), it)
+                writer.add_scalar('Losses/Entropy', entropy_loss, it)
+                writer.add_scalar('Losses/Loss', loss.item(), it)
+                
+            writer.add_scalar('Episode/Return', episode_rewards, episode)
+            writer.add_scalar('Episode/Length', episode_len, episode)
+            if episode%n_save == 0:
+                print('Episode : %d' %(episode))
+                self.save_weights(path_save + 'actor_critic_weights_' + str(episode) + '.pth')
+                        
+        writer.close()
+        
+    def predict(self, env, data_point):
+        """
+        Description
+        --------------
+        Predict the label of a data point.
+        
+        Parameters
+        --------------
+        
+        Returns
+        --------------
+        """
+        
+        env.reset(data_point)
+        state = env.state
+        while not env.done:
+            action = self.action_greedy(state)
+            env.step(action)
+            state = env.state
+        
+        return action%self.d
+        
+    def test(self, env, n_test=1000):
+        """
+        Description
+        --------------
+        Test the agent on n_test data points generated by env.
+        
+        Parameters
+        --------------
+        env      : Object of class Environment.
+        n_test   : Int, number of data points to test the agent on.
+        
+        Returns
+        --------------
+        accuracy : FLoat in [0, 1], the accuracy of the agent on this test.
+        """
+        
+        valids = 0
+        for i in range(n_test):
+            data_point = env.generate()
+            env.reset(data_point)
+            label_pred, label_true = self.predict(env, data_point), env.label
+            valids += (label_pred==label_true)
+            
+        return valids/n_test
+    
+    def save_weights(self, path):
+        """
+        Description
+        --------------
+        Save the agents q-network weights.
+        
+        Parameters
+        --------------
+        path: String, path to a .pth file containing the weights of a q-network.
+        
+        Returns
+        --------------
+        """
+        
+        torch.save(self.actor_critic.state_dict(), path)
+    
+    def load_weights(self, path):
+        """
+        Description
+        --------------
+        Load the weights of a q-network.
+        
+        Parameters
+        --------------
+        path: String, path to a .pth file containing the weights of a q-network.
+        
+        Returns
+        --------------
+        """
+        
+        self.actor_critic.load_state_dict(torch.load(path))
+        
+    def children(self, state):
+        """
+        Description
+        --------------
+        Give the possible outcomes of taking the greedy policy at the considered state.
+        
+        Parameters
+        --------------
+        state : Object of class State.
+        
+        Returns
+        --------------
+        children : Set of objects of class State.
+        action   : Int, action taken at state with the agent policy.
+        """
+        
+        children = []
+        action = self.action_greedy(state)
+        if action >= self.d: return children, action
+        for category in range(self.categories[action]):
+            values = state.values.copy()
+            values[action] = category
+            children.append(StateDQN(values, state.encoder, self.categories))
+
+        return children, action
+    
+    def build_string_state(self, state):
+        """
+        Description
+        --------------
+        Build string representation of the agent decision (with parentheses) starting from state.
+        
+        Parameters
+        --------------
+        state : Object of class State.
+        
+        Returns
+        --------------
+        string : String representation of a tree.
+        """
+        
+        l, action = self.children(state)
+        if action >= self.d: return str(self.action_greedy(state)%self.d) + ''
+        string = ''
+        for child in l:
+            string += '(X_' + str(action) + '=' + str(child.values[action]) + ' ' + self.build_string_state(child) + ') '
+
+        return string
+    
+    def build_string(self, encoder):
+        """
+        Description
+        --------------
+        Build string representation of the agent decision.
+        
+        Parameters
+        --------------
+        
+        Returns
+        --------------
+        string : String representation of a tree.
+        """
+        
+        return '( ' + self.build_string_state(StateDQN([np.NaN for i in range(self.d)], encoder, self.categories)) + ')'
+    
+    def plot_tree(self, encoder):
+        """
+        Description
+        --------------
+        Plot the agent's decision tree.
+        
+        Parameters
+        --------------
+        
+        Returns
+        --------------
+        nltk tree object, helpful to visualize the agent's decision tree policy.
+        """
+
+        return Tree.fromstring(self.build_string(encoder))
+        
+        
+            
+            
         
         
             
