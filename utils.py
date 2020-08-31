@@ -153,6 +153,31 @@ class Encoder:
 
         return state_one_hot
     
+#     def transform(self, state_values):
+#         """
+#         Description
+#         --------------
+#         Encode the vector state representation with dummies.
+        
+#         Parameters & Attributes
+#         --------------
+#         state_values : List of length d where the ith entry is either NaN or the the feature value.
+        
+#         Returns
+#         --------------
+#         state_one_hot : 2D np.array representing the one-hot encoded state.
+#         """
+        
+#         state_encoded = np.zeros((1, self.d), dtype = np.float32)
+#         for i, value in enumerate(state_values):
+#             if np.isnan(value):
+#                 state_encoded[0, i] = -1
+
+#             else:
+#                 state_encoded[0, i] = value
+        
+#         return state_encoded
+    
     
 class StateDQN:
     """

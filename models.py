@@ -1,7 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class DQNetwork(nn.Module):
     
     def __init__(self, input_size=25, out=8):
@@ -24,7 +23,7 @@ class DQNetwork(nn.Module):
         self.fc_1 = nn.Linear(input_size, 32)
         self.fc_2 = nn.Linear(32, 32)
         self.output = nn.Linear(32, out)
-        
+                
     def forward(self, x):
         """
         Description
