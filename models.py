@@ -11,7 +11,7 @@ class DQNetwork(nn.Module):
         
         Parameters
         ---------------
-        input_size : Int, the one-hot encoding representation dimension.
+        input_size : Int, dimensionof the one-hot encoded representation of a state.
         out        : Int, output dimension, equal to the number of possible actions.
         fc_1       : nn.Linear, first fully connected layer.
         fc_2       : nn.Linear, second fully connected layer.
@@ -43,8 +43,8 @@ class DQNetwork(nn.Module):
         x = F.relu(self.fc_2(x))
         return self.output(x)
     
-
-class ActorCritic(nn.Module):
+    
+class ActorCriticNetwork(nn.Module):
     
     def __init__(self, input_size=25, out=8):
         """
@@ -54,7 +54,7 @@ class ActorCritic(nn.Module):
         
         Parameters
         ---------------
-        input_size    : Int, the one-hot encoding representation dimension.
+        input_size    : Int, dimensionof the one-hot encoded representation of a state.
         out           : Int, Actor output dimension, equal to the number of possible actions.
         fc_1          : nn.Linear, first fully connected layer (common parameters between Actor and Critic).
         fc_2          : nn.Linear, second fully connected layer (common parameters between Actor and Critic).
@@ -62,7 +62,7 @@ class ActorCritic(nn.Module):
         critic_output : nn.Linear, critic output fully connected layer.
         """
         
-        super(ActorCritic, self).__init__()
+        super(ActorCriticNetwork, self).__init__()
         
         self.fc_1 = nn.Linear(input_size, 32)
         self.fc_2 = nn.Linear(32, 32)
@@ -93,22 +93,6 @@ class ActorCritic(nn.Module):
         x = F.relu(self.fc_2(x))
         
         return self.critic_output(x), self.actor_output(x)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    
+    
+    
